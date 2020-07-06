@@ -26,7 +26,7 @@ type Escola struct {
 
 const (
 	urlBase = "https://www2.bauru.sp.gov.br"
-	dirBase = "C:\\Users\\lfgai\\Desktop\\infantil"
+	dirBase = "./infantil"
 	dirArqs = "/arquivos/arquivos_site/sec_educacao/atividades_pedagogica_distancia/"
 )
 
@@ -39,6 +39,9 @@ var (
 
 func main() {
 	t0 := time.Now()
+	if err := os.Mkdir(dirBase, 0744); err != nil {
+		log.Fatalf("mkdir: %v", err)
+	}
 	escolas, err := escolasInfantil()
 	if err != nil {
 		log.Fatal(err)
