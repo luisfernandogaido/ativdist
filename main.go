@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -31,9 +33,12 @@ const (
 )
 
 var (
-	reEscInf = regexp.MustCompile(`<a href="atividades_distancia\.aspx\?t=1&a=([\d]+)">([^<]+)</a>`)
+	reEscInf = regexp.MustCompile(`<a href="atividades_distancia\.aspx\?t=1&a=([\d]+)#1">([^<]+)</a>`)
 	reArqInf = regexp.MustCompile(
 		`<a href="/arquivos/arquivos_site/sec_educacao/atividades_pedagogica_distancia/([^"]+)"><b>([^<]+)</b></a>`,
+	)
+	reHidden = regexp.MustCompile(
+		`<input type="hidden" name="([^"]+)" id="[^"]+" value="([^"]+)" />`,
 	)
 )
 
@@ -75,13 +80,36 @@ func escolasInfantil() ([]Escola, error) {
 	if err != nil {
 		return nil, fmt.Errorf("escolas infantil: %w", err)
 	}
-	defer res.Body.Close()
-	b, err := ioutil.ReadAll(res.Body)
+	s := bufio.NewScanner(res.Body)
+	values := url.Values{
+		"__EVENTTARGET":                        []string{"ctl00$ctl00$ctl00$ExternoBody$content$content_educacao$lbtnMateriaisImpressao"},
+		"__EVENTARGUMENT":                      []string{""},
+		"_SCROLLPOSITIONX":                     []string{"0"},
+		"__SCROLLPOSITIONY":                    []string{"0"},
+		"ctl00$ctl00$ctl00$cabecalho$txtBusca": []string{""},
+	}
+	for s.Scan() {
+		matches := reHidden.FindStringSubmatch(s.Text())
+		if len(matches) > 0 {
+			values.Set(matches[1], matches[2])
+		}
+	}
+	res.Body.Close()
+	res, err = http.PostForm(urlBase+"/educacao/atividades_distancia.aspx", values)
 	if err != nil {
 		return nil, fmt.Errorf("escolas infantil: %w", err)
 	}
-	doc := string(b)
-	matches := reEscInf.FindAllStringSubmatch(doc, -1)
+	s = bufio.NewScanner(res.Body)
+	var linha string
+	for s.Scan() {
+		if strings.Contains(s.Text(), "<span id=\"ctl00_ctl00_ctl00_ExternoBody_content_content_educacao_lblHTML\">") {
+			linha = s.Text()
+			break
+		}
+	}
+	q := strings.Index(linha, "<h3>Fundamental</h3>")
+	linha = linha[:q]
+	matches := reEscInf.FindAllStringSubmatch(linha, -1)
 	escolas := make([]Escola, 0)
 	for _, m := range matches {
 		if len(m) != 3 {
