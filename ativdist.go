@@ -13,17 +13,15 @@ import (
 )
 
 const (
-	host       = "cncdealer.gmfinancial.com"
-	home       = "https://cncdealer.gmfinancial.com"
-	urlBase    = "https://cncdealer.gmfinancial.com/Newconweb"
+	urlBase    = "https://www2.bauru.sp.gov.br"
 	retries    = 40
 	sleepRetry = time.Second * 5
+	dir        = "C:\\GoPrograms\\ativdist"
 )
 
 var (
-	client  *http.Client
-	cookie  string
-	rplReal = strings.NewReplacer(" ", "", ".", "", ",", ".")
+	client *http.Client
+	cookie string
 )
 
 func init() {
@@ -149,53 +147,6 @@ func newValuesDoc(doc string) (url.Values, error) {
 		return nil, fmt.Errorf("newvaluesdoc: %w", err)
 	}
 	return newValuesHashes(h), nil
-}
-
-func Login(user, pass string) error {
-	res, err := client.Get(home)
-	if err != nil {
-		log.Fatal(err)
-	}
-	b, err := io.ReadAll(res.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
-	res.Body.Close()
-	doc := string(b)
-	h, err := getHashes(doc)
-	if err != nil {
-		return fmt.Errorf("ncw login: %w", err)
-	}
-	values := newValuesHashes(h)
-	values.Set("edtUsuario", user)
-	values.Set("edtSenha", pass)
-	values.Set("__EVENTTARGET", "btnLogin")
-	u := res.Request.URL.String()
-	res2, err := client.PostForm(u, values)
-	if err != nil {
-		return fmt.Errorf("ncw login: %w", err)
-	}
-	defer res2.Body.Close()
-	b, err = io.ReadAll(res2.Body)
-	if err != nil {
-		return fmt.Errorf("ncw login: %w", err)
-	}
-	if strings.Contains(string(b), "Usuário ou senha inválida") {
-		return fmt.Errorf("ncw login: Usuário ou senha inválida")
-	}
-	if !strings.Contains(string(b), "Página Inicial") {
-		return fmt.Errorf("ncw login: falhou")
-	}
-	if !strings.Contains(string(b), "Cobrança") {
-		return fmt.Errorf("ncw login: falhou")
-	}
-	if !strings.Contains(string(b), "Contemplação") {
-		return fmt.Errorf("ncw login: falhou")
-	}
-	if !strings.Contains(string(b), "Logout") {
-		return fmt.Errorf("ncw login: falhou")
-	}
-	return nil
 }
 
 func getRetry(u string) (doc string, newU string, finalErr error) {

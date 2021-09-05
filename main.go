@@ -1,167 +1,175 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
 
-type Arquivo struct {
-	Nome string
-	Href string
-}
-
 type Escola struct {
-	Nome     string
-	A        string
-	Arquivos []Arquivo
+	Categoria   string
+	Nome        string
+	Qs          string
+	Professoras []Professora
 }
 
-const (
-	urlBase = "https://www2.bauru.sp.gov.br"
-	dirBase = "./infantil"
-	dirArqs = "/arquivos/arquivos_site/sec_educacao/atividades_pedagogica_distancia/"
-)
+type Professora struct {
+	Escola     Escola
+	Nome       string
+	Qs         string
+	Documentos []Documento
+}
 
-var (
-	reEscInf = regexp.MustCompile(`<a href="atividades_distancia\.aspx\?t=1&a=([\d]+)#1">([^<]+)</a>`)
-	reArqInf = regexp.MustCompile(
-		`<a href="/arquivos/arquivos_site/sec_educacao/atividades_pedagogica_distancia/([^"]+)"><b>([^<]+)</b></a>`,
-	)
-	reHidden = regexp.MustCompile(
-		`<input type="hidden" name="([^"]+)" id="[^"]+" value="([^"]+)" />`,
-	)
-)
+type Documento struct {
+	Professora Professora
+	Nome       string
+	Href       string
+}
 
 func main() {
-	t0 := time.Now()
-	if err := os.Mkdir(dirBase, 0744); err != nil {
-		log.Fatalf("mkdir: %v", err)
-	}
-	escolas, err := escolasInfantil()
-	if err != nil {
+	if err := Coleta(); err != nil {
 		log.Fatal(err)
 	}
-	for i, escola := range escolas {
-		dir := filepath.Join(dirBase, escola.Nome)
-		_, err := os.Stat(dir)
-		if err != nil && !os.IsExist(err) {
-			if err := os.Mkdir(dir, 0744); err != nil && err != os.ErrExist {
-				log.Fatal(err)
-			}
-		}
-		if err := arquivos(&escola); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("%v) %v (%v arquivos):\n", i+1, escola.Nome, len(escola.Arquivos))
-		for _, a := range escola.Arquivos {
-			file := filepath.Join(dir, a.Nome)
-			fmt.Println(a.Nome)
-			if err := download(a.Href, file); err != nil {
-				log.Fatal(err)
-			}
-		}
-		fmt.Println("---")
-	}
-	fmt.Println(time.Since(t0))
 }
 
-func escolasInfantil() ([]Escola, error) {
-	res, err := http.Get(urlBase + "/educacao/atividades_distancia.aspx")
+func Coleta() error {
+	doc, newU, err := getRetry(urlBase + "/educacao/atividades_distancia.aspx")
 	if err != nil {
-		return nil, fmt.Errorf("escolas infantil: %w", err)
+		return fmt.Errorf("coleta: %w", err)
 	}
-	s := bufio.NewScanner(res.Body)
-	values := url.Values{
-		"__EVENTTARGET":                        []string{"ctl00$ctl00$ctl00$ExternoBody$content$content_educacao$lbtnMateriaisImpressao"},
-		"__EVENTARGUMENT":                      []string{""},
-		"_SCROLLPOSITIONX":                     []string{"0"},
-		"__SCROLLPOSITIONY":                    []string{"0"},
-		"ctl00$ctl00$ctl00$cabecalho$txtBusca": []string{""},
-	}
-	for s.Scan() {
-		matches := reHidden.FindStringSubmatch(s.Text())
-		if len(matches) > 0 {
-			values.Set(matches[1], matches[2])
-		}
-	}
-	res.Body.Close()
-	res, err = http.PostForm(urlBase+"/educacao/atividades_distancia.aspx", values)
+	values, err := newValuesDoc(doc)
 	if err != nil {
-		return nil, fmt.Errorf("escolas infantil: %w", err)
+		return fmt.Errorf("coleta: %w", err)
 	}
-	s = bufio.NewScanner(res.Body)
-	var linha string
-	for s.Scan() {
-		if strings.Contains(s.Text(), "<span id=\"ctl00_ctl00_ctl00_ExternoBody_content_content_educacao_lblHTML\">") {
-			linha = s.Text()
-			break
-		}
-	}
-	q := strings.Index(linha, "<h3>Fundamental</h3>")
-	linha = linha[:q]
-	matches := reEscInf.FindAllStringSubmatch(linha, -1)
-	escolas := make([]Escola, 0)
-	for _, m := range matches {
-		if len(m) != 3 {
-			return nil, fmt.Errorf("escolas infantil: %w", err)
-		}
-		escola := Escola{
-			Nome: m[2],
-			A:    m[1],
-		}
-		escolas = append(escolas, escola)
-	}
-	return escolas, nil
-}
-
-func arquivos(e *Escola) error {
-	res, err := http.Get(fmt.Sprintf("%v/educacao/atividades_distancia.aspx?t=1&a=%v", urlBase, e.A))
+	values.Set("__EVENTTARGET", "ctl00$ctl00$ctl00$ExternoBody$content$content_educacao$lbtnMateriaisImpressao")
+	doc, newU, err = postRetry(newU, values)
 	if err != nil {
-		return fmt.Errorf("arquivos: %w", err)
+		return fmt.Errorf("coleta: %w", err)
 	}
-	defer res.Body.Close()
-	b, err := ioutil.ReadAll(res.Body)
+	escolas, err := Escolas(doc)
 	if err != nil {
-		return fmt.Errorf("arquivos: %w", err)
+		return fmt.Errorf("coleta: %w", err)
 	}
-	doc := string(b)
-	matches := reArqInf.FindAllStringSubmatch(doc, -1)
-	e.Arquivos = make([]Arquivo, 0)
-	for _, m := range matches {
-		if len(m) != 3 {
-			return fmt.Errorf("arquivos: %w", err)
+	for i, e := range escolas {
+		fmt.Printf("escola %v/%v: %v\n", i+1, len(escolas), e.Nome)
+		professoras, err := Professoras(e)
+		if err != nil {
+			return fmt.Errorf("coleta: %w", err)
 		}
-		arq := Arquivo{
-			Nome: m[2],
-			Href: urlBase + dirArqs + url.PathEscape(m[1]),
+		for j, p := range professoras {
+			fmt.Printf("professora %v/%v: %v\n", j+1, len(professoras), p.Nome)
+			dirPro := filepath.Join(dir, fmt.Sprintf("%v/%v/%v", time.Now().Format("20060102"), e.Nome, p.Nome))
+			if err := os.MkdirAll(dirPro, 0644); err != nil {
+				return fmt.Errorf("coleta: %w", err)
+			}
+			documentos, err := Documentos(p)
+			if err != nil {
+				return fmt.Errorf("coleta: %w", err)
+			}
+			for k, d := range documentos {
+				fmt.Printf("documento %v/%v: %v\n", k+1, len(documentos), d.Nome)
+				if err := Download(d, dirPro); err != nil {
+					return fmt.Errorf("coleta: %w", err)
+				}
+			}
+			professoras[j].Documentos = documentos
 		}
-		e.Arquivos = append(e.Arquivos, arq)
+		escolas[i].Professoras = professoras
+		fmt.Println(i, e.Nome, len(escolas[i].Professoras))
 	}
 	return nil
 }
 
-func download(path, file string) error {
-	res, err := http.Get(path)
+func Escolas(doc string) ([]Escola, error) {
+	linhas := strings.Split(doc, "\n")
+	var linha string
+	for _, l := range linhas {
+		if strings.Contains(l, `<span id="ctl00_ctl00_ctl00_ExternoBody_content_content_educacao_lblHTML">`) {
+			linha = l
+			break
+		}
+	}
+	indexh3 := erH3.FindAllStringIndex(linha, -1)
+	trechos := make([]string, 0)
+	for i := range indexh3 {
+		var trecho string
+		if i != len(indexh3)-1 {
+			trecho = linha[indexh3[i][0]:indexh3[i+1][0]]
+		} else {
+			trecho = linha[indexh3[i][0]:]
+		}
+		trechos = append(trechos, trecho)
+	}
+	escolas := make([]Escola, 0)
+	for _, trecho := range trechos {
+		matchesh3 := erH3.FindStringSubmatch(trecho)
+		categoria := matchesh3[1]
+		matches := erEscola.FindAllStringSubmatch(trecho, -1)
+		for _, m := range matches {
+			escola := Escola{
+				Categoria: categoria,
+				Nome:      m[2],
+				Qs:        m[1],
+			}
+			escolas = append(escolas, escola)
+		}
+
+	}
+	return escolas, nil
+}
+
+func Professoras(e Escola) ([]Professora, error) {
+	doc, _, err := getRetry(urlBase + "/educacao/atividades_distancia.aspx?" + e.Qs)
+	if err != nil {
+		return nil, fmt.Errorf("professoras: %w", err)
+	}
+	matches := erProfessora.FindAllStringSubmatch(doc, -1)
+	professoras := make([]Professora, len(matches))
+	for i := range matches {
+		professoras[i] = Professora{
+			Escola: e,
+			Nome:   matches[i][2],
+			Qs:     matches[i][1],
+		}
+	}
+	return professoras, nil
+}
+
+func Documentos(p Professora) ([]Documento, error) {
+	doc, _, err := getRetry(urlBase + "/educacao/atividades_distancia.aspx?" + p.Qs)
+	if err != nil {
+		return nil, fmt.Errorf("documentos: %w", err)
+	}
+	matches := erDocumento.FindAllStringSubmatch(doc, -1)
+	documentos := make([]Documento, 0)
+	for _, m := range matches {
+		d := Documento{
+			Professora: p,
+			Nome:       m[2],
+			Href:       m[1],
+		}
+		documentos = append(documentos, d)
+	}
+	return documentos, nil
+}
+
+func Download(d Documento, dir string) error {
+	filename := filepath.Join(dir, d.Nome)
+	u := urlBase + d.Href
+	res, err := client.Get(u)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
 	defer res.Body.Close()
-	f, err := os.Create(file)
+	b, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
-	defer f.Close()
-	if _, err := io.Copy(f, res.Body); err != nil {
+	if err := ioutil.WriteFile(filename, b, 0644); err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
 	return nil
