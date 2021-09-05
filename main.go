@@ -79,7 +79,6 @@ func Coleta() error {
 			professoras[j].Documentos = documentos
 		}
 		escolas[i].Professoras = professoras
-		fmt.Println(i, e.Nome, len(escolas[i].Professoras))
 	}
 	return nil
 }
